@@ -38,6 +38,13 @@ class CreateError(Exception):
         self.message = message
 
 
+class UpdateError(Exception):
+    message = "Generic unable to update error."
+
+    def __init__(self, message=message):
+        self.message = message
+
+
 class AdventureNotFound(Exception):
     message = "Adventure not found"
 
@@ -54,6 +61,13 @@ class IdNotFound(Exception):
 
 class IdInvalid(Exception):
     message = "Invalid id"
+
+    def __init__(self, message=message):
+        self.message = message
+
+
+class CoerceError(Exception):
+    message = "Coerce error."
 
     def __init__(self, message=message):
         self.message = message

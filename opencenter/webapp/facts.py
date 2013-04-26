@@ -25,6 +25,7 @@
 
 import flask
 
+from opencenter.db import exceptions
 from opencenter.db.api import api_from_models
 from opencenter.webapp import generic
 
@@ -57,21 +58,24 @@ def create():
             object_type, 'node_id=%d and key="%s"' % (int(data['node_id']),
                                                       data['key']))
 
-    if old_fact:
-        model_object = api._model_update_by_id(
-            object_type, old_fact['id'], data)
-        # send update notification
-        generic._notify(model_object, object_type, old_fact['id'])
-    else:
-        try:
-            model_object = api._model_create(object_type, data)
-        except KeyError as e:
-            # missing required field
-            return generic.http_badrequest(msg=str(e))
+    try:
+        if old_fact:
+            fact_id = old_fact['id']
+            model_object = api._model_update_by_id(
+                object_type, fact_id, data)
+        else:
+            try:
+                model_object = api._model_create(object_type, data)
+            except KeyError as e:
+                # missing required field
+                return generic.http_badrequest(msg=str(e))
+            fact_id = model_object['id']
+    except exceptions.CoerceError as e:
+        return generic.http_badrequest(msg=e.message)
+    # send update notification
+    generic._notify(model_object, object_type, fact_id)
 
-        generic._notify(model_object, object_type, model_object['id'])
-
-    href = flask.request.base_url + str(model_object['id'])
+    href = ''.join((flask.request.base_url, str(fact_id)))
     return generic.http_response(201, '%s Created' %
                                  singular_object_type.capitalize(), ref=href,
                                  **{singular_object_type: model_object})

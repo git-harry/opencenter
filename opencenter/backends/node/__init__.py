@@ -24,6 +24,7 @@
 ##############################################################################
 
 from opencenter import backends
+from opencenter.db import exceptions
 import opencenter.webapp.ast
 import opencenter.db.api
 
@@ -268,7 +269,7 @@ class NodeBackend(backends.Backend):
         key, value = kwargs['key'], kwargs['value']
 
         # if the fact exists, update it, else create it.
-        oldkeys = api._model_query('facts', 'node_id=%s and key=%s' %
+        oldkeys = api._model_query('facts', 'node_id=%s and key="%s"' %
                                    (node_id, key))
 
         _by_key = dict([[x['key'], x['value']] for x in oldkeys])
@@ -286,12 +287,18 @@ class NodeBackend(backends.Backend):
 
         if len(oldkeys) > 0:
             # update
-            api._model_update_by_id('facts', {'id': oldkeys[0]['id'],
-                                              'value': value})
+            try:
+                api._model_update_by_id('facts', oldkeys[0]['id'],
+                                        {'value': value})
+            except exceptions.UpdateError as e:
+                return self._fail(msg=e.message)
         else:
-            api._model_create('facts', {'node_id': node_id,
-                                        'key': key,
-                                        'value': value})
+            try:
+                api._model_create('facts', {'node_id': node_id,
+                                            'key': key,
+                                            'value': value})
+            except exceptions.CreateError as e:
+                return self._fail(msg=e.message)
 
         return self._ok(data=reply_data)
 

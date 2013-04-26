@@ -207,6 +207,8 @@ def object_by_id(object_type, object_id):
             return http_notfound(msg='not found')
         except exceptions.IdInvalid:
             return http_badrequest()
+        except exceptions.CoerceError as e:
+            return http_badrequest(msg=e.message)
 
         _notify(model_object, object_type, object_id)
 

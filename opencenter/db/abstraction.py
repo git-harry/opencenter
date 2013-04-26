@@ -24,6 +24,7 @@
 ##############################################################################
 
 import copy
+import json
 import logging
 
 import sqlalchemy
@@ -32,11 +33,13 @@ from opencenter.db.database import session
 from opencenter.db import exceptions
 from opencenter.db import inmemory
 
+import opencenter.backends
 import opencenter.webapp.ast
 # from opencenter.webapp.ast import FilterBuilder, FilterTokenizer
 
 
 LOG = logging.getLogger(__name__)
+schema_cache = {}
 
 
 class DbAbstraction(object):
@@ -97,28 +100,58 @@ class DbAbstraction(object):
             return result[0]
         return None
 
-    # README(shep): this is not being called anywhere
-    #def _coerce_data(self, data):
-    #    schema = self.get_schema()
-    #    for field, value in data.items():
-    #        wanted_type = None
-    #        type_name = None
-    #        if field in schema:
-    #            type_name = schema[field]['type']
-    #        else:
-    #            raise ValueError('non-schema data in update/create call')
-    #        if type_name == 'INTEGER' or type_name == 'NUMBER':
-    #            wanted_type = int
-    #        if 'VARCHAR' in type_name:
-    #            wanted_type = str
-    #        if wanted_type is not None:
-    #            data[field] = wanted_type(value)
+    def _coerce_data(self, data, existing=None):
+        self.logger.debug(str(data))
+        fact_types = {'string': str, 'integer': int, 'number': int,
+                      'bool': bool, 'untyped': lambda x: x}
+        if self.name == 'facts':
+            try:
+                fact_name = existing.key
+            except AttributeError:
+                fact_name = data['key']
+            fact_schema = opencenter.backends.fact_by_name(fact_name)
+            if fact_schema is not None:
+                try:
+                    fact_type_name = fact_schema['type']
+                except KeyError:
+                    msg = '%s does not have a type defined.' % fact_name
+                    self.logger.debug(msg)
+                else:
+                    fact_type = fact_types[fact_type_name]
+                    value = data['value']
+                    #assuming that the fact value gets converted to JSON
+                    #and stored as a string in the db
+                    try:
+                        data['value'] = fact_type(value)
+                    except (TypeError, ValueError):
+                        msg = 'Unable to coerce value to %s.' % fact_type
+                        raise exceptions.CoerceError(msg)
+
+        schema_types = {'VARCHAR': str, 'TEXT': str, 'JSON_ENTRY': json.dumps,
+                        'JSON': json.dumps, 'INTEGER': int, 'NUMBER': int}
+        schema = self.get_schema()
+        for field, value in data.items():
+            try:
+                schema_field = schema[field]
+            except KeyError:
+                #sanitize methods deal with this
+                continue
+            type_name = schema_field['type']
+            if type_name.startswith('VARCHAR'):
+                type_name = 'VARCHAR'
+            schema_type = schema_types[type_name]
+            try:
+                schema_type(value)
+            except (TypeError, ValueError):
+                if value is not None:
+                    msg = 'Unable to coerce value to %s.' % schema_type
+                    raise exceptions.CoerceError(msg)
 
     def _sanitize_for_update(self, data):
         # should we sanitize, or raise?
         retval = copy.deepcopy(data)
 
-        # self._coerce_data(retval)
+        # self._coerce_data(retval, obj)
 
         schema = self.get_schema()
 
@@ -188,6 +221,14 @@ class SqlAlchemyAbstraction(DbAbstraction):
         return [x.jsonify(api=self.api) for x in self.model.query.all()]
 
     def get_schema(self):
+        try:
+            fields = schema_cache[self.name]
+        except KeyError:
+            fields = self._get_schema()
+            schema_cache[self.name] = fields
+        return fields
+
+    def _get_schema(self):
         obj = self.model
         cols = obj.__table__.columns
 
@@ -232,6 +273,7 @@ class SqlAlchemyAbstraction(DbAbstraction):
         :param fields: dict of columns:values to create
         """
 
+        self._coerce_data(data)
         new_data = self._sanitize_for_create(data)
 
         if self.name in ('facts', 'attrs'):
@@ -291,8 +333,9 @@ class SqlAlchemyAbstraction(DbAbstraction):
     def update(self, id, data):
         id = self._validate_id_format(id)
 
-        new_data = self._sanitize_for_update(data)
         r = self.model.query.filter_by(id=id).first()
+        self._coerce_data(data, r)
+        new_data = self._sanitize_for_update(data)
 
         for field in new_data:
             r.__setattr__(field, data[field])
@@ -381,7 +424,13 @@ class APIAbstraction(DbAbstraction):
     def create(self, data):
         new_data = self._sanitize_for_create(data)
         new_node = self.objects.new(**new_data)
-        new_node.save()
+        res = new_node.save()
+        if res.status_code < 200 or res.status_code >= 300:
+            default_msg = ('Unable to create %s with key %s' %
+                           (new_node.object_type, new_node.key))
+            msg = res.json.get('message', default_msg)
+            raise exceptions.CreateError(message=msg)
+
         return new_node.to_hash()
 
     def delete(self, id):
@@ -427,7 +476,13 @@ class APIAbstraction(DbAbstraction):
             raise exceptions.IdNotFound(message='id %d does not exist' % id)
 
         obj = self.objects.new(id=id, **(self._sanitize_for_update(new_data)))
-        obj.save()
+
+        res = obj.save()
+        if res.status_code < 200 or res.status_code >= 300:
+            default_msg = ('Unable to update %s with id %s' %
+                           (obj.object_type, obj.id))
+            msg = res.json.get('message', default_msg)
+            raise exceptions.UpdateError(message=msg)
 
         return obj.to_hash()
 

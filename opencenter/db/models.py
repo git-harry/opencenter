@@ -43,7 +43,7 @@ from opencenter.db.database import session
 
 # Special Fields
 class JsonBlob(types.TypeDecorator):
-    impl = types.Text
+    impl = types.LargeBinary
 
     def _is_valid_obj(self, value):
         if isinstance(value, dict) or isinstance(value, list):
@@ -65,7 +65,7 @@ class JsonBlob(types.TypeDecorator):
 
 
 class JsonEntry(types.TypeDecorator):
-    impl = types.Text
+    impl = types.LargeBinary
 
     def process_bind_param(self, value, dialect):
         return json.dumps(value)
